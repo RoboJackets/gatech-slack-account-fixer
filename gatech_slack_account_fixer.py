@@ -267,9 +267,7 @@ def main() -> None:  # pylint: disable=unused-variable
         type=FileType("r"),
         required=True,
     )
-    parser.add_argument("--debug", help="print debug information", action="store_true")
-    parser.add_argument("--dry-run", help="do not make any changes", action="store_true")
-    parser.add_argument("--fix-names", help="update names to match the directory", action="store_true")
+    parser.add_argument("--slack-api-token", help="the OAuth token to authenticate to the Slack API", required=True)
     parser.add_argument(
         "--buzzapi-username",
         help="the username to use when connecting to BuzzAPI",
@@ -280,7 +278,9 @@ def main() -> None:  # pylint: disable=unused-variable
         help="the password to use when connecting to BuzzAPI",
         required="buzzapi" in sys.argv,
     )
-    parser.add_argument("--slack-api-token", help="the OAuth token to authenticate to the Slack API", required=True)
+    parser.add_argument("--fix-names", help="update names to match the directory", action="store_true")
+    parser.add_argument("--dry-run", help="do not make any changes", action="store_true")
+    parser.add_argument("--debug", help="print debug information", action="store_true")
     args = parser.parse_args()
 
     formatter = logging.Formatter("%(levelname)s: %(message)s")

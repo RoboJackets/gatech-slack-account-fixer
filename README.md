@@ -35,10 +35,10 @@ pipx upgrade gatech-slack-account-fixer
 ```
 usage: gatech-slack-account-fixer [-h] --directory {whitepages,buzzapi}
                                   --pre-migration-report PRE_MIGRATION_REPORT
-                                  [--debug] [--dry-run] [--fix-names]
+                                  --slack-api-token SLACK_API_TOKEN
                                   [--buzzapi-username BUZZAPI_USERNAME]
                                   [--buzzapi-password BUZZAPI_PASSWORD]
-                                  --slack-api-token SLACK_API_TOKEN
+                                  [--fix-names] [--dry-run] [--debug]
 
 Corrects Slack account information, for use with Enterprise Grid migrations
 
@@ -49,15 +49,15 @@ optional arguments:
   --pre-migration-report PRE_MIGRATION_REPORT
                         the pre-migration report provided by Alana, in CSV
                         format
-  --debug               print debug information
-  --dry-run             do not make any changes
-  --fix-names           update names to match the directory
+  --slack-api-token SLACK_API_TOKEN
+                        the OAuth token to authenticate to the Slack API
   --buzzapi-username BUZZAPI_USERNAME
                         the username to use when connecting to BuzzAPI
   --buzzapi-password BUZZAPI_PASSWORD
                         the password to use when connecting to BuzzAPI
-  --slack-api-token SLACK_API_TOKEN
-                        the OAuth token to authenticate to the Slack API
+  --fix-names           update names to match the directory
+  --dry-run             do not make any changes
+  --debug               print debug information
 ```
 
 ## Develop
