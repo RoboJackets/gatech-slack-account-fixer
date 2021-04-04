@@ -60,6 +60,14 @@ optional arguments:
   --debug               print debug information
 ```
 
+Note that this script will necessarily take a long time! There are many external service calls, the Slack API is heavily rate-limited, and most workspaces that need this have many accounts to check. If you are not getting any output, that means that your accounts are OK. You will only get output if:
+
+- the script cannot match a Slack account to a Georgia Tech identity
+- the script makes a change (or would make a change, if you have `--dry-run` enabled)
+- the script tried to make a change but failed (usually Slack API issues, a few cases are specifically handled and explained)
+
+For reference, running on the SCC workspace (around 800 accounts) against Whitepages with no changes needed takes about a minute.
+
 ## Develop
 
 This project uses [Poetry](https://python-poetry.org/) for dependency management and `pipx` integration. You can run the tool with `poetry run gatech-slack-account-fixer` during development.
