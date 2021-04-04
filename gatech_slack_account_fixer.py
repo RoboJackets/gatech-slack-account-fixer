@@ -10,7 +10,7 @@ from json import dumps
 from re import fullmatch, search
 from typing import Dict, Optional, TextIO
 
-from ldap3 import ALL_ATTRIBUTES, Connection, Server, Entry  # type: ignore
+from ldap3 import ALL_ATTRIBUTES, Connection, Entry, Server  # type: ignore
 
 from requests import post
 
@@ -113,6 +113,13 @@ def find_user_in_whitepages(ldap: Connection, **kwargs: str) -> Optional[Dict[st
         logger.warning(DIRECTORY_ONE_RECORD_NO_EMAIL.format(directory="Whitepages", search_filter=search_filter))
         return None
 
+    if not entry["mail"].value.endswith("gatech.edu"):
+        print(ldap.entries)
+        logger.warning(
+            "Whitepages: Matched record has non-GT email for {search_filter}".format(search_filter=search_filter)
+        )
+        return None
+
     display_name_parts = entry["displayName"].value.split(",")
     first_name_parts = display_name_parts[1].split()
     name = first_name_parts[0] + " " + display_name_parts[0]
@@ -202,13 +209,20 @@ def find_user_in_buzzapi(username: str, password: str, **kwargs: str) -> Optiona
         )
         return None
 
+    if not result["mail"].endswith("gatech.edu"):
+        print(results)
+        logger.warning(
+            "BuzzAPI: Matched record has non-GT email for {search_filter}".format(search_filter=search_filter)
+        )
+        return None
+
     return {
         "email": result["mail"].lower(),
         "name": result["givenName"].split()[0] + " " + result["sn"],
     }
 
 
-def main() -> None:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements,unused-variable
+def main() -> None:  # pylint: disable=unused-variable
     """
     Parses command-line arguments and calls out to helper functions.
 
@@ -286,7 +300,7 @@ def main() -> None:  # pylint: disable=too-many-locals,too-many-branches,too-man
     no_match = 0
     total_accounts = 0
 
-    for response in slack.users_list():  # pylint: disable=too-many-nested-blocks
+    for response in slack.users_list():
         for member in response.get("members"):
             if member["id"] == "USLACKBOT":  # slackbot does not have is_bot set for whatever reason
                 continue
