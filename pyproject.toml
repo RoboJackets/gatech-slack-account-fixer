@@ -11,6 +11,7 @@ python = "^3.8"
 requests = "^2.23.0"
 slack-sdk = "^3.4.2"
 ldap3 = "^2.9"
+ratelimiter = "^1.2.0"
 
 [tool.poetry.dev-dependencies]
 black = "^20.8b1"

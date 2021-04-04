@@ -12,9 +12,12 @@ from typing import Dict, Optional, TextIO
 
 from ldap3 import ALL_ATTRIBUTES, Connection, Entry, Server  # type: ignore
 
+from ratelimiter import RateLimiter  # type: ignore
+
 from requests import post
 
 from slack_sdk import WebClient  # type: ignore
+from slack_sdk.errors import SlackApiError
 
 CHANGING_EMAIL = "Changing email from {old} to {new}"
 CHANGING_NAME = 'Changing name for {email} from "{old}" to "{new}"'
@@ -62,7 +65,7 @@ def build_ldap_filter(kwargs: Dict[str, str]) -> str:
     return search_filter
 
 
-def find_user_in_whitepages(ldap: Connection, **kwargs: str) -> Optional[Dict[str, str]]:
+def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optional[Dict[str, str]]:
     """
     Looks up a user in Whitepages
 
@@ -92,7 +95,7 @@ def find_user_in_whitepages(ldap: Connection, **kwargs: str) -> Optional[Dict[st
         for entry_in_loop in ldap.entries:
             if "mail" in entry_in_loop:
                 entries_with_email += 1
-                emails.add(entry_in_loop["mail"].value)
+                emails.add(entry_in_loop["mail"].value.lower())
                 entry_with_email = entry_in_loop
 
         if entries_with_email == 0:
@@ -122,7 +125,8 @@ def find_user_in_whitepages(ldap: Connection, **kwargs: str) -> Optional[Dict[st
 
     display_name_parts = entry["displayName"].value.split(",")
     first_name_parts = display_name_parts[1].split()
-    name = first_name_parts[0] + " " + display_name_parts[0]
+    last_name_parts = display_name_parts[0].split()
+    name = first_name_parts[0] + " " + last_name_parts[0]
 
     return {
         "email": entry["mail"].value.lower(),
@@ -130,7 +134,7 @@ def find_user_in_whitepages(ldap: Connection, **kwargs: str) -> Optional[Dict[st
     }
 
 
-def find_user_in_buzzapi(username: str, password: str, **kwargs: str) -> Optional[Dict[str, str]]:
+def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -> Optional[Dict[str, str]]:
     """
     Looks up a user in BuzzAPI
 
@@ -179,9 +183,9 @@ def find_user_in_buzzapi(username: str, password: str, **kwargs: str) -> Optiona
         entry_with_email = {}
         emails = set()
         for entry_in_loop in results:
-            if "mail" in entry_in_loop:
+            if "mail" in entry_in_loop and "givenName" in entry_in_loop:
                 entries_with_email += 1
-                emails.add(entry_in_loop["mail"])
+                emails.add(entry_in_loop["mail"].lower())
                 entry_with_email = entry_in_loop
 
         if entries_with_email == 0:
@@ -220,6 +224,25 @@ def find_user_in_buzzapi(username: str, password: str, **kwargs: str) -> Optiona
         "email": result["mail"].lower(),
         "name": result["givenName"].split()[0] + " " + result["sn"],
     }
+
+
+def name_looks_valid(name: str) -> bool:
+    """
+    Guesses if a name field is valid. Valid is defined as being at least two words, each beginning with a capital
+    letter and ending with a lowercase letter.
+
+    :param name: the name to check
+    :return: whether this name is considered valid
+    """
+    existing_parts = name.split()
+    parts_that_look_like_names = list(
+        filter(lambda part: fullmatch(r"[A-Z](?:[A-Za-z-']+)?[a-z]", part), existing_parts)
+    )
+    if len(existing_parts) < 2 or len(parts_that_look_like_names) < 2:
+        return False
+    if len(parts_that_look_like_names) > 2 or len(existing_parts) == len(parts_that_look_like_names):
+        return True
+    return False
 
 
 def main() -> None:  # pylint: disable=unused-variable
@@ -285,26 +308,52 @@ def main() -> None:  # pylint: disable=unused-variable
     if args.directory == "whitepages":
 
         def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
-            return find_user_in_whitepages(ldap, **kwargs)
+            return find_user_in_whitepages(ldap, kwargs)
 
     else:
 
         def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
-            whitepages_result = find_user_in_whitepages(ldap, **kwargs)
+            whitepages_result = find_user_in_whitepages(ldap, kwargs)
             if whitepages_result is not None:
                 return whitepages_result
-            return find_user_in_buzzapi(args.buzzapi_username, args.buzzapi_password, **kwargs)
+            return find_user_in_buzzapi(args.buzzapi_username, args.buzzapi_password, kwargs)
+
+    rate_limiter = RateLimiter(max_calls=1, period=2)
+
+    def apply_changes(member_arg: Dict[str, str], new_profile_arg: Dict[str, str]) -> None:
+        with rate_limiter:
+            try:
+                slack.users_profile_set(user=member_arg["id"], profile=new_profile_arg)
+            except SlackApiError as error:
+                if error.response["error"] == "cannot_update_admin_user":
+                    logger.warning(
+                        "Could not update user "
+                        + member_arg["profile"]["email"]  # type: ignore
+                        + " because they are an admin+ and you are not the primary owner"
+                    )
+                    logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
+                elif error.response["error"] == "email_taken":
+                    logger.warning(
+                        "Could not update user "
+                        + member_arg["profile"]["email"]  # type: ignore
+                        + " because the new email is already taken"
+                    )
+                    logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
+                else:
+                    raise
 
     update_email = 0
     update_name = 0
     no_match = 0
     total_accounts = 0
 
-    for response in slack.users_list():
-        for member in response.get("members"):
+    for page in slack.users_list():
+        for member in page.get("members"):
             if member["id"] == "USLACKBOT":  # slackbot does not have is_bot set for whatever reason
                 continue
             if member["is_bot"] is True:
+                continue
+            if member["deleted"] is True:
                 continue
             total_accounts += 1
             profile = member["profile"]
@@ -328,11 +377,11 @@ def main() -> None:  # pylint: disable=unused-variable
                                         )
                                     )
                                     continue
-                            else:
+                            else:  # email not in pre-migration report
                                 no_match += 1
                                 logger.warning(NO_MATCH_FOR_EMAIL_IN_DIRECTORY.format(email=profile["email"]))
                                 continue
-                    else:
+                    else:  # mailbox does not look like a GT username
                         if profile["email"] in email_map:
                             search_results = find_user(mail=email_map[profile["email"]])
                             if search_results is None:
@@ -343,7 +392,7 @@ def main() -> None:  # pylint: disable=unused-variable
                                     )
                                 )
                                 continue
-                        else:
+                        else:  # email not in pre-migration report
                             no_match += 1
                             logger.warning(NO_MATCH_FOR_EMAIL_IN_DIRECTORY.format(email=profile["email"]))
                             continue
@@ -358,17 +407,25 @@ def main() -> None:  # pylint: disable=unused-variable
                     logger.info(CHANGING_EMAIL.format(old=profile["email"], new=search_results["email"]))
                     new_profile["email"] = search_results["email"]
 
-                if args.fix_names and (search_results["name"] != profile["real_name"] or profile["display_name"] != ""):
+                if (
+                    args.fix_names
+                    and search_results["name"] != profile["real_name"]
+                    and not name_looks_valid(profile["real_name"])
+                ):
                     update_name += 1
                     logger.info(
                         CHANGING_NAME.format(
                             email=profile["email"], old=profile["real_name"], new=search_results["name"]
                         )
                     )
+                    new_profile["real_name"] = search_results["name"]
+
+                if args.fix_names and profile["display_name"] != "":
+                    new_profile["display_name"] = ""
 
                 if len(new_profile) > 0 and not args.dry_run:
-                    slack.users_profile_set(profile=new_profile)
-            else:
+                    apply_changes(member, new_profile)
+            else:  # email is non-gatech.edu
                 if len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2:
                     real_name_parts = profile["real_name"].split()
                     display_name_parts = profile["display_name"].split()
@@ -386,7 +443,8 @@ def main() -> None:  # pylint: disable=unused-variable
                                     no_match += 1
                                     logger.warning(NO_MATCH_FOR_NAME.format(**profile))
                                     continue
-                            else:
+                            else:  # display_name field is not two words
+                                no_match += 1
                                 logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
                                 continue
 
@@ -407,8 +465,10 @@ def main() -> None:  # pylint: disable=unused-variable
                         logger.info(CHANGING_EMAIL.format(old=profile["email"], new=search_results["email"]))
                         new_profile["email"] = search_results["email"]
 
-                    if args.fix_names and (
-                        search_results["name"] != profile["real_name"] or profile["display_name"] != ""
+                    if (
+                        args.fix_names
+                        and search_results["name"] != profile["real_name"]
+                        and not name_looks_valid(profile["real_name"])
                     ):
                         update_name += 1
                         logger.info(
@@ -416,10 +476,14 @@ def main() -> None:  # pylint: disable=unused-variable
                                 email=profile["email"], old=profile["real_name"], new=search_results["name"]
                             )
                         )
+                        new_profile["real_name"] = search_results["name"]
+
+                    if args.fix_names and profile["display_name"] != "":
+                        new_profile["display_name"] = ""
 
                     if len(new_profile) > 0 and not args.dry_run:
-                        slack.users_profile_set(profile=new_profile)
-                else:
+                        apply_changes(member, new_profile)
+                else:  # neither name field is two words
                     no_match += 1
                     logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
                     continue
