@@ -66,7 +66,7 @@ Note that this script will necessarily take a long time! There are many external
 - the script makes a change (or would make a change, if you have `--dry-run` enabled)
 - the script tried to make a change but failed (usually Slack API issues, a few cases are specifically handled and explained)
 
-For reference, running on the SCC workspace (around 800 accounts) against Whitepages with no changes needed takes about a minute.
+For reference, running on the SCC workspace (around 800 accounts) against Whitepages with no changes needed takes about a minute, and with BuzzAPI enabled it takes about three minutes.
 
 ## Develop
 
