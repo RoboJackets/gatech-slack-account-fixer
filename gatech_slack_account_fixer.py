@@ -355,6 +355,9 @@ def main() -> None:  # pylint: disable=unused-variable
                 continue
             if member["deleted"] is True:
                 continue
+            if member["is_restricted"] is True or member["is_ultra_restricted"] is True:
+                logger.info(f"Skipping guest user {member['profile']['email']}")
+                continue
             total_accounts += 1
             profile = member["profile"]
             if "email" not in profile:
