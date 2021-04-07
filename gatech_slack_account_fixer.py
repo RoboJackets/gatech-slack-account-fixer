@@ -496,3 +496,6 @@ def main() -> None:  # pylint: disable=unused-variable
         logger.info(f"Total names updated: {update_name}")
     logger.info(f"Total unmatched accounts: {no_match}")
     logger.info(f"Total accounts: {total_accounts}")
+
+if __name__ == "__main__":
+   main()
