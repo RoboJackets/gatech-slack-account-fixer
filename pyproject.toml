@@ -7,7 +7,7 @@ authors = ["Kristaps Berzinch <kristapsberzinch@gmail.com>"]
 repository = "https://github.com/RoboJackets/gatech-slack-account-fixer"
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.7"
 requests = "^2.23.0"
 slack-sdk = "^3.4.2"
 ldap3 = "^2.9"
