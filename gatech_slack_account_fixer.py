@@ -131,14 +131,9 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         )
         return None
 
-    display_name_parts = entry["displayName"].value.split(",")
-    first_name_parts = display_name_parts[1].split()
-    last_name_parts = display_name_parts[0].split()
-    name = first_name_parts[0] + " " + last_name_parts[0]
-
     return {
         "email": entry["mail"].value.lower(),
-        "name": name,
+        "name": entry["givenName"].value.split()[0] + " " + entry["sn"].value,
     }
 
 
