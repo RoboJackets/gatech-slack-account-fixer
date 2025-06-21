@@ -422,8 +422,8 @@ def main() -> None:  # pylint: disable=unused-variable
                     )
                     duplicates += 1
                     continue
-                else:
-                    gt_user_to_slack_user[search_results["username"]] = profile["email"]
+
+                gt_user_to_slack_user[search_results["username"]] = profile["email"]
 
                 new_profile = {}
 
