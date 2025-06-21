@@ -412,7 +412,14 @@ def main() -> None:  # pylint: disable=unused-variable
                     raise Exception("Missing a case somewhere! Email: " + profile["email"])
 
                 if search_results["username"] in gt_user_to_slack_user:
-                    logger.warning("Multiple Slack accounts for GT user " + search_results["username"] + " - found " + search_results["email"] + " and " + gt_user_to_slack_user[search_results["username"]])
+                    logger.warning(
+                        "Multiple Slack accounts for GT user "
+                        + search_results["username"]
+                        + " - found "
+                        + search_results["email"]
+                        + " and "
+                        + gt_user_to_slack_user[search_results["username"]]
+                    )
                     duplicates += 1
                     continue
                 else:
