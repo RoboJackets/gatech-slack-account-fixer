@@ -11,7 +11,7 @@ from json import dumps
 from re import fullmatch, search
 from typing import Dict, Optional, TextIO
 
-from ldap3 import ALL_ATTRIBUTES, Connection, Entry, Server  # type: ignore
+from ldap3 import Connection, Entry, Server  # type: ignore
 
 from requests import post
 
@@ -85,7 +85,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
     result = ldap.search(
         search_base="dc=whitepages,dc=gatech,dc=edu",
         search_filter=search_filter,
-        attributes=["mail","primaryUid","givenName","sn"],
+        attributes=["mail", "primaryUid", "givenName", "sn"],
     )
 
     if result is not True:
@@ -99,7 +99,11 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         entry_with_email = None
         emails = set()
         for entry_in_loop in ldap.entries:
-            if "mail" in entry_in_loop and entry_in_loop["mail"] is not None and entry_in_loop["mail"].value is not None:
+            if (
+                "mail" in entry_in_loop
+                and entry_in_loop["mail"] is not None
+                and entry_in_loop["mail"].value is not None
+            ):
                 entries_with_email += 1
                 emails.add(entry_in_loop["mail"].value.lower())
                 entry_with_email = entry_in_loop
@@ -247,7 +251,7 @@ def find_user_in_apiary(token: str, kwargs: Dict[str, str]) -> Optional[Dict[str
             "email": kwargs["mail"],
         },
         headers={"Authorization": f"Bearer {token}"},
-        timeout=(1, 30)
+        timeout=(1, 30),
     )
 
     if response.status_code == 404:
@@ -366,6 +370,7 @@ def main() -> None:  # pylint: disable=unused-variable
     else:
 
         if args.apiary_token is None:
+
             def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
                 whitepages_result = find_user_in_whitepages(ldap, kwargs)
                 if whitepages_result is not None:
@@ -384,7 +389,6 @@ def main() -> None:  # pylint: disable=unused-variable
                     return buzzapi_result
 
                 return find_user_in_apiary(args.apiary_token, kwargs)
-
 
     def apply_changes(member_arg: Dict[str, str], new_profile_arg: Dict[str, str]) -> None:
         try:
@@ -511,7 +515,9 @@ def main() -> None:  # pylint: disable=unused-variable
                 if len(new_profile) > 0 and not args.dry_run:
                     apply_changes(member, new_profile)
             else:  # email is non-gatech.edu
-                if args.fuzzy_match and (len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2):
+                if args.fuzzy_match and (
+                    len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2
+                ):
                     real_name_parts = profile["real_name"].split()
                     display_name_parts = profile["display_name"].split()
 
