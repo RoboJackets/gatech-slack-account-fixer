@@ -132,6 +132,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         return None
 
     return {
+        "username": entry["primaryUid"].value.lower(),
         "email": entry["mail"].value.lower(),
         "name": entry["givenName"].value.split()[0] + " " + entry["sn"].value,
     }
@@ -224,6 +225,7 @@ def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -
         return None
 
     return {
+        "username": result["gtPrimaryGTAccountUsername"],
         "email": result["mail"].lower(),
         "name": result["givenName"].split()[0] + " " + result["sn"],
     }
@@ -348,7 +350,10 @@ def main() -> None:  # pylint: disable=unused-variable
     update_email = 0
     update_name = 0
     no_match = 0
+    duplicates = 0
     total_accounts = 0
+
+    gt_user_to_slack_user = {}
 
     for page in slack.users_list():
         for member in page.get("members"):
@@ -405,6 +410,13 @@ def main() -> None:  # pylint: disable=unused-variable
 
                 if search_results is None:
                     raise Exception("Missing a case somewhere! Email: " + profile["email"])
+
+                if search_results["username"] in gt_user_to_slack_user:
+                    logger.warning("Multiple Slack accounts for GT user " + search_results["username"] + " - found " + search_results["email"] + " and " + gt_user_to_slack_user[search_results["username"]])
+                    duplicates += 1
+                    continue
+                else:
+                    gt_user_to_slack_user[search_results["username"]] = profile["email"]
 
                 new_profile = {}
 
@@ -498,6 +510,7 @@ def main() -> None:  # pylint: disable=unused-variable
     if args.fix_names:
         logger.info(f"Total names updated: {update_name}")
     logger.info(f"Total unmatched accounts: {no_match}")
+    logger.info(f"Total duplicate accounts: {duplicates}")
     logger.info(f"Total accounts: {total_accounts}")
 
 
