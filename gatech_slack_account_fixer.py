@@ -457,7 +457,7 @@ def main() -> None:  # pylint: disable=unused-variable
                 search_results = find_user(mail=profile["email"])
                 if search_results is None:
                     mailbox = Address(addr_spec=profile["email"]).username
-                    if fullmatch(r"[a-z][a-z]+[0-9]+", mailbox) and is_georgia_tech_email_address(profile["email"]):
+                    if is_georgia_tech_email_address(profile["email"]) and fullmatch(r"[a-z][a-z]+[0-9]+", mailbox):
                         search_results = find_user(uid=mailbox)
                         if search_results is None:
                             if profile["email"] in email_map:
