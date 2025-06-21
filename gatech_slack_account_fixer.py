@@ -227,6 +227,56 @@ def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -
     }
 
 
+def find_user_in_apiary(token: str, kwargs: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """
+    Looks up a user in Apiary
+
+    :param token: the token to use for authentication
+    :param kwargs: Filters to apply
+    :return: None if no results, or a dict with the email and name for the account
+    """
+    if "mail" not in kwargs:
+        return None
+
+    logger = logging.getLogger()
+    logger.debug("Querying Apiary with email " + kwargs["mail"])
+
+    response = post(
+        "https://my.robojackets.org/api/v1/users/searchByEmail",
+        json={
+            "email": kwargs["mail"],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=(1, 30)
+    )
+
+    if response.status_code == 404:
+        return None
+
+    response.raise_for_status()
+
+    json = response.json()
+
+    if "user" not in json:
+        print(dumps(json))
+        raise Exception("Apiary had an error")
+
+    result = json["user"]
+
+    if not is_georgia_tech_email_address(result["gt_email"]):
+        print(result)
+        logger.warning(
+            "Apiary: Matched record has non-GT email for {search_filter}".format(search_filter=kwargs["mail"])
+        )
+        return None
+
+    return {
+        "username": result["uid"],
+        "email": result["gt_email"].lower(),
+        "name": result["first_name"] + " " + result["last_name"],
+    }
+
+
 def name_looks_valid(name: str) -> bool:
     """
     Guesses if a name field is valid. Valid is defined as being at least two words, each beginning with a capital
@@ -268,7 +318,7 @@ def main() -> None:  # pylint: disable=unused-variable
         type=FileType("r"),
         required=True,
     )
-    parser.add_argument("--slack-api-token", help="the OAuth token to authenticate to the Slack API", required=True)
+    parser.add_argument("--slack-token", help="the token to authenticate to the Slack API", required=True)
     parser.add_argument(
         "--buzzapi-username",
         help="the username to use when connecting to BuzzAPI",
@@ -279,6 +329,8 @@ def main() -> None:  # pylint: disable=unused-variable
         help="the password to use when connecting to BuzzAPI",
         required="buzzapi" in sys.argv,
     )
+    parser.add_argument("--apiary-token", help="the token to authenticate to the Apiary API")
+    parser.add_argument("--fuzzy-match", help="attempt to match users with names", action="store_true")
     parser.add_argument("--fix-names", help="update names to match the directory", action="store_true")
     parser.add_argument("--dry-run", help="do not make any changes", action="store_true")
     parser.add_argument("--debug", help="print debug information", action="store_true")
@@ -300,7 +352,7 @@ def main() -> None:  # pylint: disable=unused-variable
     email_map = parse_email_map(args.pre_migration_report)
 
     slack = WebClient(
-        token=args.slack_api_token,
+        token=args.slack_token,
         logger=logger,
     )
 
@@ -313,11 +365,26 @@ def main() -> None:  # pylint: disable=unused-variable
 
     else:
 
-        def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
-            whitepages_result = find_user_in_whitepages(ldap, kwargs)
-            if whitepages_result is not None:
-                return whitepages_result
-            return find_user_in_buzzapi(args.buzzapi_username, args.buzzapi_password, kwargs)
+        if args.apiary_token is None:
+            def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
+                whitepages_result = find_user_in_whitepages(ldap, kwargs)
+                if whitepages_result is not None:
+                    return whitepages_result
+                return find_user_in_buzzapi(args.buzzapi_username, args.buzzapi_password, kwargs)
+
+        else:
+
+            def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
+                whitepages_result = find_user_in_whitepages(ldap, kwargs)
+                if whitepages_result is not None:
+                    return whitepages_result
+
+                buzzapi_result = find_user_in_buzzapi(args.buzzapi_username, args.buzzapi_password, kwargs)
+                if buzzapi_result is not None:
+                    return buzzapi_result
+
+                return find_user_in_apiary(args.apiary_token, kwargs)
+
 
     def apply_changes(member_arg: Dict[str, str], new_profile_arg: Dict[str, str]) -> None:
         try:
@@ -409,7 +476,7 @@ def main() -> None:  # pylint: disable=unused-variable
                         "Multiple Slack accounts for GT user "
                         + search_results["username"]
                         + " - found "
-                        + search_results["email"]
+                        + profile["email"]
                         + " and "
                         + gt_user_to_slack_user[search_results["username"]]
                     )
@@ -444,7 +511,7 @@ def main() -> None:  # pylint: disable=unused-variable
                 if len(new_profile) > 0 and not args.dry_run:
                     apply_changes(member, new_profile)
             else:  # email is non-gatech.edu
-                if len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2:
+                if args.fuzzy_match and (len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2):
                     real_name_parts = profile["real_name"].split()
                     display_name_parts = profile["display_name"].split()
 
