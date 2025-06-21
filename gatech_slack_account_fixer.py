@@ -55,7 +55,7 @@ def is_georgia_tech_email_address(email_address: str) -> bool:
     """
     Check if the provided email address is a Georgia Tech email address
     """
-    return Address(addr_spec=email_address.strip()).domain.endswith("gatech.edu")
+    return Address(addr_spec=email_address.strip()).domain.split(".")[-2:] == ["gatech", "edu"]
 
 
 def build_ldap_filter(kwargs: Dict[str, str]) -> str:
