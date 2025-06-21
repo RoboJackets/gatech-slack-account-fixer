@@ -13,8 +13,6 @@ from typing import Dict, Optional, TextIO
 
 from ldap3 import ALL_ATTRIBUTES, Connection, Entry, Server  # type: ignore
 
-from ratelimiter import RateLimiter  # type: ignore
-
 from requests import post
 
 from slack_sdk import WebClient
@@ -323,29 +321,26 @@ def main() -> None:  # pylint: disable=unused-variable
                 return whitepages_result
             return find_user_in_buzzapi(args.buzzapi_username, args.buzzapi_password, kwargs)
 
-    rate_limiter = RateLimiter(max_calls=1, period=2)
-
     def apply_changes(member_arg: Dict[str, str], new_profile_arg: Dict[str, str]) -> None:
-        with rate_limiter:
-            try:
-                slack.users_profile_set(user=member_arg["id"], profile=new_profile_arg)
-            except SlackApiError as error:
-                if error.response["error"] == "cannot_update_admin_user":
-                    logger.warning(
-                        "Could not update user "
-                        + member_arg["profile"]["email"]  # type: ignore
-                        + " because they are an admin+ and you are not the primary owner"
-                    )
-                    logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
-                elif error.response["error"] == "email_taken":
-                    logger.warning(
-                        "Could not update user "
-                        + member_arg["profile"]["email"]  # type: ignore
-                        + " because the new email is already taken"
-                    )
-                    logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
-                else:
-                    raise
+        try:
+            slack.users_profile_set(user=member_arg["id"], profile=new_profile_arg)
+        except SlackApiError as error:
+            if error.response["error"] == "cannot_update_admin_user":
+                logger.warning(
+                    "Could not update user "
+                    + member_arg["profile"]["email"]  # type: ignore
+                    + " because they are an admin+ and you are not the primary owner"
+                )
+                logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
+            elif error.response["error"] == "email_taken":
+                logger.warning(
+                    "Could not update user "
+                    + member_arg["profile"]["email"]  # type: ignore
+                    + " because the new email is already taken"
+                )
+                logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
+            else:
+                raise
 
     update_email = 0
     update_name = 0
