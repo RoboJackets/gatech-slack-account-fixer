@@ -1,5 +1,5 @@
 # gatech-slack-account-fixer
-[![GitHub license](https://img.shields.io/github/license/RoboJackets/gatech-slack-account-fixer)](https://github.com/RoboJackets/gatech-slack-account-fixer/blob/main/LICENSE)
+[![GitHub license](https://img.shields.io/github/license/RoboJackets/gatech-slack-account-fixer)](https://github.com/RoboJackets/gatech-slack-account-fixer/blob/main/LICENSE) [![GitHub Actions](https://github.com/RoboJackets/gatech-slack-account-fixer/actions/workflows/build.yml/badge.svg)](https://github.com/RoboJackets/gatech-slack-account-fixer/actions/workflows/build.yml)
 
 Corrects Slack account information, for use with Enterprise Grid migrations
 
