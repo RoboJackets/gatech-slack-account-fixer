@@ -6,6 +6,7 @@ import logging
 import sys
 from argparse import ArgumentParser, FileType
 from csv import DictReader
+from email.headerregistry import Address
 from json import dumps
 from re import fullmatch, search
 from typing import Dict, Optional, TextIO
@@ -48,6 +49,13 @@ def parse_email_map(pre_migration_report: TextIO) -> Dict[str, str]:
             email_map[row["Email"]] = match_parts.group("new_email")
 
     return email_map
+
+
+def is_georgia_tech_email_address(email_address: str) -> bool:
+    """
+    Check if the provided email address is a Georgia Tech email address
+    """
+    return Address(addr_spec=email_address.strip()).domain.endswith("gatech.edu")
 
 
 def build_ldap_filter(kwargs: Dict[str, str]) -> str:
@@ -116,7 +124,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         logger.warning(DIRECTORY_ONE_RECORD_NO_EMAIL.format(directory="Whitepages", search_filter=search_filter))
         return None
 
-    if not entry["mail"].value.endswith("gatech.edu"):
+    if not is_georgia_tech_email_address(entry["mail"].value):
         print(ldap.entries)
         logger.warning(
             "Whitepages: Matched record has non-GT email for {search_filter}".format(search_filter=search_filter)
@@ -213,7 +221,7 @@ def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -
         )
         return None
 
-    if not result["mail"].endswith("gatech.edu"):
+    if not is_georgia_tech_email_address(result["mail"]):
         print(results)
         logger.warning(
             "BuzzAPI: Matched record has non-GT email for {search_filter}".format(search_filter=search_filter)
@@ -363,7 +371,7 @@ def main() -> None:  # pylint: disable=unused-variable
             if "email" not in profile:
                 print(member)
                 raise Exception("Missing email in profile - does this token have access to read emails?")
-            if profile["email"].endswith("gatech.edu"):
+            if is_georgia_tech_email_address(profile["email"]):
                 search_results = find_user(mail=profile["email"])
                 if search_results is None:
                     mailbox = profile["email"].split("@")[0]
