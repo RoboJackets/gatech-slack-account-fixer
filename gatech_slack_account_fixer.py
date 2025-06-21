@@ -11,6 +11,8 @@ from json import dumps
 from re import fullmatch, search
 from typing import Dict, Optional, TextIO
 
+import cachier
+
 from ldap3 import Connection, Entry, Server  # type: ignore
 
 from requests import post
@@ -29,6 +31,13 @@ NOT_ENOUGH_INFO_TO_MATCH = (
 DIRECTORY_NO_EMAIL = "{directory}: No entries had email for {search_filter}"
 DIRECTORY_MORE_THAN_ONE_EMAIL = "{directory}: More than one email listed for {search_filter}"
 DIRECTORY_ONE_RECORD_NO_EMAIL = "{directory}: Only one record returned but no email for {search_filter}"
+
+
+cachier.set_global_params(
+    cache_dir="_cache/",  # type: ignore
+    pickle_reload=False,  # type: ignore
+    allow_none=True,      # type: ignore
+)
 
 
 def parse_email_map(pre_migration_report: TextIO) -> Dict[str, str]:
@@ -53,7 +62,10 @@ def is_georgia_tech_email_address(email_address: str) -> bool:
     """
     Check if the provided email address is a Georgia Tech email address
     """
-    return Address(addr_spec=email_address.strip()).domain.split(".")[-2:] == ["gatech", "edu"]
+    return Address(addr_spec=email_address.strip()).domain.split(".")[-2:] in [
+        ["gatech", "edu"],
+        ["atdc", "org"],
+    ]
 
 
 def build_ldap_filter(kwargs: Dict[str, str]) -> str:
@@ -250,11 +262,14 @@ def find_user_in_apiary(token: str, kwargs: Dict[str, str]) -> Optional[Dict[str
         json={
             "email": kwargs["mail"],
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
         timeout=(1, 30),
     )
 
-    if response.status_code == 404:
+    if response.status_code in [404, 422]:
         return None
 
     response.raise_for_status()
@@ -364,6 +379,7 @@ def main() -> None:  # pylint: disable=unused-variable
 
     if args.directory == "whitepages":
 
+        @cachier.cachier()  # type: ignore
         def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
             return find_user_in_whitepages(ldap, kwargs)
 
@@ -371,6 +387,7 @@ def main() -> None:  # pylint: disable=unused-variable
 
         if args.apiary_token is None:
 
+            @cachier.cachier()  # type: ignore
             def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
                 whitepages_result = find_user_in_whitepages(ldap, kwargs)
                 if whitepages_result is not None:
@@ -379,6 +396,7 @@ def main() -> None:  # pylint: disable=unused-variable
 
         else:
 
+            @cachier.cachier()  # type: ignore
             def find_user(**kwargs: str) -> Optional[Dict[str, str]]:
                 whitepages_result = find_user_in_whitepages(ldap, kwargs)
                 if whitepages_result is not None:
@@ -435,11 +453,11 @@ def main() -> None:  # pylint: disable=unused-variable
             if "email" not in profile:
                 print(member)
                 raise Exception("Missing email in profile - does this token have access to read emails?")
-            if is_georgia_tech_email_address(profile["email"]):
+            if is_georgia_tech_email_address(profile["email"]) or args.apiary_token is not None:
                 search_results = find_user(mail=profile["email"])
                 if search_results is None:
-                    mailbox = profile["email"].split("@")[0]
-                    if fullmatch(r"[a-z][a-z]+[0-9]+", mailbox):
+                    mailbox = Address(addr_spec=profile["email"]).username
+                    if fullmatch(r"[a-z][a-z]+[0-9]+", mailbox) and is_georgia_tech_email_address(profile["email"]):
                         search_results = find_user(uid=mailbox)
                         if search_results is None:
                             if profile["email"] in email_map:
@@ -514,70 +532,68 @@ def main() -> None:  # pylint: disable=unused-variable
 
                 if len(new_profile) > 0 and not args.dry_run:
                     apply_changes(member, new_profile)
-            else:  # email is non-gatech.edu
-                if args.fuzzy_match and (
-                    len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2
-                ):
-                    real_name_parts = profile["real_name"].split()
-                    display_name_parts = profile["display_name"].split()
 
-                    search_results = None
+            elif args.fuzzy_match and (  # email is non-gatech.edu
+                len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2
+            ):
+                real_name_parts = profile["real_name"].split()
+                display_name_parts = profile["display_name"].split()
 
-                    if len(real_name_parts) == 2:
-                        search_results = find_user(givenName=real_name_parts[0] + "*", sn=real_name_parts[1])
-                        if search_results is None:
-                            if len(display_name_parts) == 2:
-                                search_results = find_user(
-                                    givenName=display_name_parts[0] + "*", sn=display_name_parts[1]
-                                )
-                                if search_results is None:
-                                    no_match += 1
-                                    logger.warning(NO_MATCH_FOR_NAME.format(**profile))
-                                    continue
-                            else:  # display_name field is not two words
+                search_results = None
+
+                if len(real_name_parts) == 2:
+                    search_results = find_user(givenName=real_name_parts[0] + "*", sn=real_name_parts[1])
+                    if search_results is None:
+                        if len(display_name_parts) == 2:
+                            search_results = find_user(givenName=display_name_parts[0] + "*", sn=display_name_parts[1])
+                            if search_results is None:
                                 no_match += 1
-                                logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
+                                logger.warning(NO_MATCH_FOR_NAME.format(**profile))
                                 continue
-
-                    if len(display_name_parts) == 2:
-                        search_results = find_user(givenName=display_name_parts[0] + "*", sn=display_name_parts[1])
-                        if search_results is None:
+                        else:  # display_name field is not two words
                             no_match += 1
-                            logger.warning(NO_MATCH_FOR_NAME.format(**profile))
+                            logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
                             continue
 
+                if len(display_name_parts) == 2:
+                    search_results = find_user(givenName=display_name_parts[0] + "*", sn=display_name_parts[1])
                     if search_results is None:
-                        raise Exception("Missing a case somewhere! Email: " + profile["email"])
+                        no_match += 1
+                        logger.warning(NO_MATCH_FOR_NAME.format(**profile))
+                        continue
 
-                    new_profile = {}
+                if search_results is None:
+                    raise Exception("Missing a case somewhere! Email: " + profile["email"])
 
-                    if profile["email"] != search_results["email"]:
-                        update_email += 1
-                        logger.info(CHANGING_EMAIL.format(old=profile["email"], new=search_results["email"]))
-                        new_profile["email"] = search_results["email"]
+                new_profile = {}
 
-                    if (
-                        args.fix_names
-                        and search_results["name"] != profile["real_name"]
-                        and not name_looks_valid(profile["real_name"])
-                    ):
-                        update_name += 1
-                        logger.info(
-                            CHANGING_NAME.format(
-                                email=profile["email"], old=profile["real_name"], new=search_results["name"]
-                            )
+                if profile["email"] != search_results["email"]:
+                    update_email += 1
+                    logger.info(CHANGING_EMAIL.format(old=profile["email"], new=search_results["email"]))
+                    new_profile["email"] = search_results["email"]
+
+                if (
+                    args.fix_names
+                    and search_results["name"] != profile["real_name"]
+                    and not name_looks_valid(profile["real_name"])
+                ):
+                    update_name += 1
+                    logger.info(
+                        CHANGING_NAME.format(
+                            email=profile["email"], old=profile["real_name"], new=search_results["name"]
                         )
-                        new_profile["real_name"] = search_results["name"]
+                    )
+                    new_profile["real_name"] = search_results["name"]
 
-                    if args.fix_names and profile["display_name"] != "":
-                        new_profile["display_name"] = ""
+                if args.fix_names and profile["display_name"] != "":
+                    new_profile["display_name"] = ""
 
-                    if len(new_profile) > 0 and not args.dry_run:
-                        apply_changes(member, new_profile)
-                else:  # neither name field is two words
-                    no_match += 1
-                    logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
-                    continue
+                if len(new_profile) > 0 and not args.dry_run:
+                    apply_changes(member, new_profile)
+            else:  # neither name field is two words
+                no_match += 1
+                logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
+                continue
 
     logger.info(f"Total emails updated: {update_email}")
     if args.fix_names:

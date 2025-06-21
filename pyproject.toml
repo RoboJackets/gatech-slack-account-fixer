@@ -11,6 +11,7 @@ python = "^3.12"
 requests = "^2.32.0"
 slack-sdk = "^3.35.0"
 ldap3 = "^2.9"
+cachier = "^3.1.2"
 
 [tool.poetry.dev-dependencies]
 black = "^25.1.0"
