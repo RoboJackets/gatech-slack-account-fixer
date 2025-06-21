@@ -85,7 +85,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
     result = ldap.search(
         search_base="dc=whitepages,dc=gatech,dc=edu",
         search_filter=search_filter,
-        attributes=ALL_ATTRIBUTES,
+        attributes=["mail","primaryUid","givenName","sn"],
     )
 
     if result is not True:
@@ -99,7 +99,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         entry_with_email = None
         emails = set()
         for entry_in_loop in ldap.entries:
-            if "mail" in entry_in_loop:
+            if "mail" in entry_in_loop and entry_in_loop["mail"] is not None and entry_in_loop["mail"].value is not None:
                 entries_with_email += 1
                 emails.add(entry_in_loop["mail"].value.lower())
                 entry_with_email = entry_in_loop
@@ -158,15 +158,13 @@ def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -
             "givenName",
             "sn",
             "mail",
-            "uid",
+            "gtPrimaryGTAccountUsername",
         ],
         "filter": search_filter,
     }
 
     response = post("https://api.gatech.edu/apiv3/central.iam.gted.accounts/search", json=request, timeout=(1, 30))
-
-    if response.status_code != 200:
-        raise Exception("BuzzAPI returned " + str(response.status_code))
+    response.raise_for_status()
 
     json = response.json()
 
