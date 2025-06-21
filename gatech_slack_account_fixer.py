@@ -353,7 +353,7 @@ def main() -> None:  # pylint: disable=unused-variable
     duplicates = 0
     total_accounts = 0
 
-    gt_user_to_slack_user = {}
+    gt_user_to_slack_user: dict[str, str] = {}
 
     for page in slack.users_list():
         for member in page.get("members"):
