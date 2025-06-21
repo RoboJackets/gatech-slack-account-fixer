@@ -36,7 +36,7 @@ DIRECTORY_ONE_RECORD_NO_EMAIL = "{directory}: Only one record returned but no em
 cachier.set_global_params(
     cache_dir="_cache/",  # type: ignore
     pickle_reload=False,  # type: ignore
-    allow_none=True,      # type: ignore
+    allow_none=True,  # type: ignore
 )
 
 
