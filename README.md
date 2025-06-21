@@ -21,6 +21,8 @@ You can provide the `--dry-run` flag to not make any changes in Slack.
 
 If you have access to BuzzAPI, you can also provide credentials for that. This will provide more accurate results than Whitepages, however Whitepages will still be checked first for better performance and data quality.
 
+If you have access to Apiary, you can also provide credentials for that.
+
 ## Install
 The recommended install method is using `pipx`.
 
@@ -35,26 +37,29 @@ pipx upgrade gatech-slack-account-fixer
 ```
 usage: gatech-slack-account-fixer [-h] --directory {whitepages,buzzapi}
                                   --pre-migration-report PRE_MIGRATION_REPORT
-                                  --slack-api-token SLACK_API_TOKEN
+                                  --slack-token SLACK_TOKEN
                                   [--buzzapi-username BUZZAPI_USERNAME]
                                   [--buzzapi-password BUZZAPI_PASSWORD]
+                                  [--apiary-token APIARY_TOKEN] [--fuzzy-match]
                                   [--fix-names] [--dry-run] [--debug]
 
 Corrects Slack account information, for use with Enterprise Grid migrations
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   --directory {whitepages,buzzapi}
                         which directory service to use
   --pre-migration-report PRE_MIGRATION_REPORT
-                        the pre-migration report provided by Alana, in CSV
-                        format
-  --slack-api-token SLACK_API_TOKEN
-                        the OAuth token to authenticate to the Slack API
+                        the pre-migration report provided by Alana, in CSV format
+  --slack-token SLACK_TOKEN
+                        the token to authenticate to the Slack API
   --buzzapi-username BUZZAPI_USERNAME
                         the username to use when connecting to BuzzAPI
   --buzzapi-password BUZZAPI_PASSWORD
                         the password to use when connecting to BuzzAPI
+  --apiary-token APIARY_TOKEN
+                        the token to authenticate to the Apiary API
+  --fuzzy-match         attempt to match users with names
   --fix-names           update names to match the directory
   --dry-run             do not make any changes
   --debug               print debug information
