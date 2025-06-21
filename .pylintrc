@@ -1,5 +1,5 @@
 [BASIC]
-disable=logging-not-lazy,logging-format-interpolation,logging-fstring-interpolation,too-many-return-statements,too-many-statements,too-many-branches,too-many-locals,too-many-nested-blocks
+disable=logging-not-lazy,logging-format-interpolation,logging-fstring-interpolation,too-many-return-statements,too-many-statements,too-many-branches,too-many-locals,too-many-nested-blocks,broad-exception-raised,consider-using-f-string
 
 [FORMAT]
 expected-line-ending-format=LF

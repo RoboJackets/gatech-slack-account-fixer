@@ -16,7 +16,7 @@ from ratelimiter import RateLimiter  # type: ignore
 
 from requests import post
 
-from slack_sdk import WebClient  # type: ignore
+from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 CHANGING_EMAIL = "Changing email from {old} to {new}"
@@ -161,7 +161,7 @@ def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -
         "filter": search_filter,
     }
 
-    response = post("https://api.gatech.edu/apiv3/central.iam.gted.accounts/search", json=request)
+    response = post("https://api.gatech.edu/apiv3/central.iam.gted.accounts/search", json=request, timeout=(1, 30))
 
     if response.status_code != 200:
         raise Exception("BuzzAPI returned " + str(response.status_code))
