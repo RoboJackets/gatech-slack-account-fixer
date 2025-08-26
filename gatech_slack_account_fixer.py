@@ -141,7 +141,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
     if entry["mail"].value is None:
         print(ldap.entries)
         logger.warning(
-            "Whitepages: Matched record has no email {search_filter}".format(search_filter=search_filter)
+            "Whitepages: Matched record has no email for {search_filter}".format(search_filter=search_filter)
         )
         return None
 
