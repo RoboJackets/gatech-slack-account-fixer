@@ -138,6 +138,13 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         logger.warning(DIRECTORY_ONE_RECORD_NO_EMAIL.format(directory="Whitepages", search_filter=search_filter))
         return None
 
+    if entry["mail"].value is None:
+        print(ldap.entries)
+        logger.warning(
+            "Whitepages: Matched record has no email {search_filter}".format(search_filter=search_filter)
+        )
+        return None
+
     if not is_georgia_tech_email_address(entry["mail"].value):
         print(ldap.entries)
         logger.warning(
