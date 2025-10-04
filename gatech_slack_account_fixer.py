@@ -2,10 +2,11 @@
 Corrects Slack account information, for use with Enterprise Grid migrations
 """
 
+import datetime
 import logging
 import sys
 from argparse import ArgumentParser, FileType
-from csv import DictReader
+from csv import DictReader, DictWriter
 from email.headerregistry import Address
 from json import dumps
 from re import fullmatch, search
@@ -156,6 +157,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         "username": entry["primaryUid"].value.lower(),
         "email": entry["mail"].value.lower(),
         "name": entry["givenName"].value.split()[0] + " " + entry["sn"].value,
+        "match_reason": "whitepages_" + list(kwargs.keys())[0],
     }
 
 
@@ -247,6 +249,7 @@ def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -
         "username": result["gtPrimaryGTAccountUsername"],
         "email": result["mail"].lower(),
         "name": result["givenName"].split()[0] + " " + result["sn"],
+        "match_reason": "buzzapi_" + list(kwargs.keys())[0],
     }
 
 
@@ -300,6 +303,7 @@ def find_user_in_apiary(token: str, kwargs: Dict[str, str]) -> Optional[Dict[str
         "username": result["uid"],
         "email": result["gt_email"].lower(),
         "name": result["first_name"] + " " + result["last_name"],
+        "match_reason": "apiary",
     }
 
 
@@ -443,18 +447,51 @@ def main() -> None:  # pylint: disable=unused-variable
     total_accounts = 0
 
     gt_user_to_slack_user: dict[str, str] = {}
+    user_details = []
 
     for page in slack.users_list():
         for member in page.get("members"):
+            this_user = {
+                "Workspace user id": member["id"],
+                "Workspace full name": member["profile"]["real_name"],
+                "Workspace display name": member["profile"]["display_name"],
+                "Workspace email address": member["profile"]["email"] if "email" in member["profile"] else None,
+                "Workspace account type": "member",
+                "Workspace account status": "deactivated" if member["deleted"] else "active",
+                "Georgia Tech username": None,
+                "Georgia Tech full name": None,
+                "Match reason": None,
+                "Recommended email address": None,
+                "Notes": None,
+                "Action taken": None,
+            }
             if member["id"] == "USLACKBOT":  # slackbot does not have is_bot set for whatever reason
+                this_user["Workspace account type"] = "slackbot"
+                user_details.append(this_user)
                 continue
             if member["is_bot"] is True:
+                this_user["Workspace account type"] = "bot"
+                user_details.append(this_user)
                 continue
             if member["deleted"] is True:
+                user_details.append(this_user)
                 continue
-            if member["is_restricted"] is True or member["is_ultra_restricted"] is True:
+            if member["is_restricted"] is True:
+                this_user["Workspace account type"] = "restricted"
+                user_details.append(this_user)
                 logger.info(f"Skipping guest user {member['profile']['email']}")
                 continue
+            if member["is_ultra_restricted"] is True:
+                this_user["Workspace account type"] = "ultra_restricted"
+                user_details.append(this_user)
+                logger.info(f"Skipping guest user {member['profile']['email']}")
+                continue
+            if member["is_primary_owner"] is True:
+                this_user["Workspace account type"] = "primary_owner"
+            if member["is_owner"] is True:
+                this_user["Workspace account type"] = "owner"
+            if member["is_admin"] is True:
+                this_user["Workspace account type"] = "admin"
             total_accounts += 1
             profile = member["profile"]
             if "email" not in profile:
@@ -476,10 +513,14 @@ def main() -> None:  # pylint: disable=unused-variable
                                             email=email_map[profile["email"]]
                                         )
                                     )
+                                    this_user["Notes"] = "Unable to locate GT user"
+                                    user_details.append(this_user)
                                     continue
                             else:  # email not in pre-migration report
                                 no_match += 1
                                 logger.warning(NO_MATCH_FOR_EMAIL_IN_DIRECTORY.format(email=profile["email"]))
+                                this_user["Notes"] = "Unable to locate GT user"
+                                user_details.append(this_user)
                                 continue
                     else:  # mailbox does not look like a GT username
                         if profile["email"] in email_map:
@@ -491,14 +532,22 @@ def main() -> None:  # pylint: disable=unused-variable
                                         email=email_map[profile["email"]]
                                     )
                                 )
+                                this_user["Notes"] = "Unable to locate GT user"
+                                user_details.append(this_user)
                                 continue
                         else:  # email not in pre-migration report
                             no_match += 1
                             logger.warning(NO_MATCH_FOR_EMAIL_IN_DIRECTORY.format(email=profile["email"]))
+                            this_user["Notes"] = "Unable to locate GT user"
+                            user_details.append(this_user)
                             continue
 
                 if search_results is None:
                     raise Exception("Missing a case somewhere! Email: " + profile["email"])
+
+                this_user["Georgia Tech username"] = search_results["username"]
+                this_user["Georgia Tech full name"] = search_results["name"]
+                this_user["Match reason"] = search_results["match_reason"]
 
                 if search_results["username"] in gt_user_to_slack_user:
                     logger.warning(
@@ -509,6 +558,11 @@ def main() -> None:  # pylint: disable=unused-variable
                         + " and "
                         + gt_user_to_slack_user[search_results["username"]]
                     )
+                    this_user["Notes"] = (
+                        "Duplicate Slack account detected - other account is "
+                        + gt_user_to_slack_user[search_results["username"]]
+                    )
+                    user_details.append(this_user)
                     duplicates += 1
                     continue
 
@@ -520,6 +574,9 @@ def main() -> None:  # pylint: disable=unused-variable
                     update_email += 1
                     logger.info(CHANGING_EMAIL.format(old=profile["email"], new=search_results["email"]))
                     new_profile["email"] = search_results["email"]
+                    this_user["Recommended email address"] = search_results["email"]
+
+                user_details.append(this_user)
 
                 if (
                     args.fix_names
@@ -601,6 +658,37 @@ def main() -> None:  # pylint: disable=unused-variable
                 no_match += 1
                 logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
                 continue
+
+    with open(
+        slack.team_info()["team"]["name"]
+        + " - User Accounts - "
+        + datetime.datetime.now().strftime("%B %d, %Y")
+        + ".csv",
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as csvfile:
+        writer = DictWriter(
+            csvfile,
+            fieldnames=[
+                "Workspace user id",
+                "Workspace full name",
+                "Workspace display name",
+                "Workspace email address",
+                "Workspace account type",
+                "Workspace account status",
+                "Georgia Tech username",
+                "Georgia Tech full name",
+                "Match reason",
+                "Recommended email address",
+                "Notes",
+                "Action taken",
+            ],
+        )
+
+        writer.writeheader()
+        for user in user_details:
+            writer.writerow(user)
 
     logger.info(f"Total emails updated: {update_email}")
     if args.fix_names:
