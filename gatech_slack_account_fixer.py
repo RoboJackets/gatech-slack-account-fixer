@@ -2,14 +2,15 @@
 Corrects Slack account information, for use with Enterprise Grid migrations
 """
 
+import datetime
 import logging
 import sys
-from argparse import ArgumentParser, FileType
-from csv import DictReader
+from argparse import ArgumentParser
+from csv import DictWriter
 from email.headerregistry import Address
 from json import dumps
-from re import fullmatch, search
-from typing import Dict, Optional, TextIO
+from re import fullmatch
+from typing import Dict, Optional
 
 import cachier
 
@@ -18,16 +19,8 @@ from ldap3 import Connection, Entry, Server  # type: ignore
 from requests import post
 
 from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
 
-CHANGING_EMAIL = "Changing email from {old} to {new}"
-CHANGING_NAME = 'Changing name for {email} from "{old}" to "{new}"'
-NO_MATCH_FOR_EMAIL_FROM_PRE_MIGRATION_REPORT = "Could not confirm match for {email} found in pre-migration report"
 NO_MATCH_FOR_EMAIL_IN_DIRECTORY = "Could not find match for {email} in directory or pre-migration report"
-NO_MATCH_FOR_NAME = 'No matches for {email} - name fields are "{real_name}" and "{display_name}"'
-NOT_ENOUGH_INFO_TO_MATCH = (
-    'Not enough information to match {email} - name fields are "{real_name}" and "{display_name}"'
-)
 DIRECTORY_NO_EMAIL = "{directory}: No entries had email for {search_filter}"
 DIRECTORY_MORE_THAN_ONE_EMAIL = "{directory}: More than one email listed for {search_filter}"
 DIRECTORY_ONE_RECORD_NO_EMAIL = "{directory}: Only one record returned but no email for {search_filter}"
@@ -38,24 +31,6 @@ cachier.set_global_params(
     pickle_reload=False,  # type: ignore
     allow_none=True,  # type: ignore
 )
-
-
-def parse_email_map(pre_migration_report: TextIO) -> Dict[str, str]:
-    """
-    Parses the pre-migration report from a file into a map of old emails to new emails
-
-    :param pre_migration_report: the pre-migration report
-    :return: map of old emails to new emails
-    """
-    email_map = {}
-
-    reader = DictReader(pre_migration_report)
-    for row in reader:
-        match_parts = search(r"(?P<new_email>[a-z0-9._-]+@(?:[a-z]+.)?gatech.edu)", row["Action"])
-        if match_parts is not None:
-            email_map[row["Email"]] = match_parts.group("new_email")
-
-    return email_map
 
 
 def is_georgia_tech_email_address(email_address: str) -> bool:
@@ -156,6 +131,7 @@ def find_user_in_whitepages(ldap: Connection, kwargs: Dict[str, str]) -> Optiona
         "username": entry["primaryUid"].value.lower(),
         "email": entry["mail"].value.lower(),
         "name": entry["givenName"].value.split()[0] + " " + entry["sn"].value,
+        "match_reason": "whitepages_" + list(kwargs.keys())[0],
     }
 
 
@@ -247,6 +223,7 @@ def find_user_in_buzzapi(username: str, password: str, kwargs: Dict[str, str]) -
         "username": result["gtPrimaryGTAccountUsername"],
         "email": result["mail"].lower(),
         "name": result["givenName"].split()[0] + " " + result["sn"],
+        "match_reason": "buzzapi_" + list(kwargs.keys())[0],
     }
 
 
@@ -300,26 +277,8 @@ def find_user_in_apiary(token: str, kwargs: Dict[str, str]) -> Optional[Dict[str
         "username": result["uid"],
         "email": result["gt_email"].lower(),
         "name": result["first_name"] + " " + result["last_name"],
+        "match_reason": "apiary",
     }
-
-
-def name_looks_valid(name: str) -> bool:
-    """
-    Guesses if a name field is valid. Valid is defined as being at least two words, each beginning with a capital
-    letter and ending with a lowercase letter.
-
-    :param name: the name to check
-    :return: whether this name is considered valid
-    """
-    existing_parts = name.split()
-    parts_that_look_like_names = list(
-        filter(lambda part: fullmatch(r"[A-Z](?:[A-Za-z-']+)?[a-z]", part), existing_parts)
-    )
-    if len(existing_parts) < 2 or len(parts_that_look_like_names) < 2:
-        return False
-    if len(parts_that_look_like_names) > 2 or len(existing_parts) == len(parts_that_look_like_names):
-        return True
-    return False
 
 
 def main() -> None:  # pylint: disable=unused-variable
@@ -338,12 +297,6 @@ def main() -> None:  # pylint: disable=unused-variable
         help="which directory service to use",
         required=True,
     )
-    parser.add_argument(
-        "--pre-migration-report",
-        help="the pre-migration report provided by Alana, in CSV format",
-        type=FileType("r"),
-        required=True,
-    )
     parser.add_argument("--slack-token", help="the token to authenticate to the Slack API", required=True)
     parser.add_argument(
         "--buzzapi-username",
@@ -356,9 +309,6 @@ def main() -> None:  # pylint: disable=unused-variable
         required="buzzapi" in sys.argv,
     )
     parser.add_argument("--apiary-token", help="the token to authenticate to the Apiary API")
-    parser.add_argument("--fuzzy-match", help="attempt to match users with names", action="store_true")
-    parser.add_argument("--fix-names", help="update names to match the directory", action="store_true")
-    parser.add_argument("--dry-run", help="do not make any changes", action="store_true")
     parser.add_argument("--debug", help="print debug information", action="store_true")
     args = parser.parse_args()
 
@@ -374,8 +324,6 @@ def main() -> None:  # pylint: disable=unused-variable
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
-
-    email_map = parse_email_map(args.pre_migration_report)
 
     slack = WebClient(
         token=args.slack_token,
@@ -415,46 +363,49 @@ def main() -> None:  # pylint: disable=unused-variable
 
                 return find_user_in_apiary(args.apiary_token, kwargs)
 
-    def apply_changes(member_arg: Dict[str, str], new_profile_arg: Dict[str, str]) -> None:
-        try:
-            slack.users_profile_set(user=member_arg["id"], profile=new_profile_arg)
-        except SlackApiError as error:
-            if error.response["error"] == "cannot_update_admin_user":
-                logger.warning(
-                    "Could not update user "
-                    + member_arg["profile"]["email"]  # type: ignore
-                    + " because they are an admin+ and you are not the primary owner"
-                )
-                logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
-            elif error.response["error"] == "email_taken":
-                logger.warning(
-                    "Could not update user "
-                    + member_arg["profile"]["email"]  # type: ignore
-                    + " because the new email is already taken"
-                )
-                logger.warning("Wanted to apply profile values " + dumps(new_profile_arg))
-            else:
-                raise
-
     update_email = 0
-    update_name = 0
     no_match = 0
     duplicates = 0
     total_accounts = 0
 
     gt_user_to_slack_user: dict[str, str] = {}
+    user_details = []
 
     for page in slack.users_list():
         for member in page.get("members"):
+            this_user = {
+                "Workspace user id": member["id"],
+                "Workspace full name": member["profile"]["real_name"],
+                "Workspace display name": member["profile"]["display_name"],
+                "Workspace username": member["name"],
+                "Workspace email address": member["profile"]["email"] if "email" in member["profile"] else None,
+                "Workspace account type": "member",
+                "Workspace account status": "deactivated" if member["deleted"] else "active",
+                "Georgia Tech username": None,
+                "Georgia Tech full name": None,
+                "Match reason": None,
+                "Recommended email address": None,
+                "Notes": None,
+                "Action taken": None,
+            }
             if member["id"] == "USLACKBOT":  # slackbot does not have is_bot set for whatever reason
+                this_user["Workspace account type"] = "slackbot"
+                user_details.append(this_user)
                 continue
             if member["is_bot"] is True:
+                this_user["Workspace account type"] = "bot"
+                user_details.append(this_user)
                 continue
-            if member["deleted"] is True:
-                continue
-            if member["is_restricted"] is True or member["is_ultra_restricted"] is True:
-                logger.info(f"Skipping guest user {member['profile']['email']}")
-                continue
+            if "is_ultra_restricted" in member and member["is_ultra_restricted"] is True:
+                this_user["Workspace account type"] = "ultra_restricted"
+            if "is_restricted" in member and member["is_restricted"] is True:
+                this_user["Workspace account type"] = "restricted"
+            if "is_admin" in member and member["is_admin"] is True:
+                this_user["Workspace account type"] = "admin"
+            if "is_owner" in member and member["is_owner"] is True:
+                this_user["Workspace account type"] = "owner"
+            if "is_primary_owner" in member and member["is_primary_owner"] is True:
+                this_user["Workspace account type"] = "primary_owner"
             total_accounts += 1
             profile = member["profile"]
             if "email" not in profile:
@@ -467,144 +418,94 @@ def main() -> None:  # pylint: disable=unused-variable
                     if is_georgia_tech_email_address(profile["email"]) and fullmatch(r"[a-z][a-z]+[0-9]+", mailbox):
                         search_results = find_user(uid=mailbox)
                         if search_results is None:
-                            if profile["email"] in email_map:
-                                search_results = find_user(mail=email_map[profile["email"]])
-                                if search_results is None:
-                                    no_match += 1
-                                    logger.warning(
-                                        NO_MATCH_FOR_EMAIL_FROM_PRE_MIGRATION_REPORT.format(
-                                            email=email_map[profile["email"]]
-                                        )
-                                    )
-                                    continue
-                            else:  # email not in pre-migration report
-                                no_match += 1
-                                logger.warning(NO_MATCH_FOR_EMAIL_IN_DIRECTORY.format(email=profile["email"]))
-                                continue
-                    else:  # mailbox does not look like a GT username
-                        if profile["email"] in email_map:
-                            search_results = find_user(mail=email_map[profile["email"]])
+                            search_results = find_user(gtSecondaryMailAddress=profile["email"])
                             if search_results is None:
                                 no_match += 1
-                                logger.warning(
-                                    NO_MATCH_FOR_EMAIL_FROM_PRE_MIGRATION_REPORT.format(
-                                        email=email_map[profile["email"]]
-                                    )
-                                )
+                                logger.warning(NO_MATCH_FOR_EMAIL_IN_DIRECTORY.format(email=profile["email"]))
+                                this_user["Notes"] = "Unable to locate GT user"
+                                user_details.append(this_user)
                                 continue
-                        else:  # email not in pre-migration report
+                    else:
+                        parsed_email_address = Address(addr_spec=profile["email"])
+
+                        if parsed_email_address.domain == "robojackets.org":
+                            username_parts = parsed_email_address.username.split("+")
+
+                            if len(username_parts) == 2 and username_parts[0] == "support":
+                                search_results = find_user(uid=username_parts[1])
+                                if search_results is None:
+                                    no_match += 1
+                                    this_user["Notes"] = "Unable to locate GT user"
+                                    user_details.append(this_user)
+                                    continue
+                            else:
+                                no_match += 1
+                                this_user["Notes"] = "Unable to locate GT user"
+                                user_details.append(this_user)
+                                continue
+                        else:
                             no_match += 1
-                            logger.warning(NO_MATCH_FOR_EMAIL_IN_DIRECTORY.format(email=profile["email"]))
+                            this_user["Notes"] = "Unable to locate GT user"
+                            user_details.append(this_user)
                             continue
 
                 if search_results is None:
                     raise Exception("Missing a case somewhere! Email: " + profile["email"])
 
+                this_user["Georgia Tech username"] = search_results["username"]
+                this_user["Georgia Tech full name"] = search_results["name"]
+                this_user["Match reason"] = search_results["match_reason"]
+
                 if search_results["username"] in gt_user_to_slack_user:
-                    logger.warning(
-                        "Multiple Slack accounts for GT user "
-                        + search_results["username"]
-                        + " - found "
-                        + profile["email"]
-                        + " and "
+                    this_user["Notes"] = (
+                        "Duplicate Slack account detected - other account is "
                         + gt_user_to_slack_user[search_results["username"]]
                     )
+                    user_details.append(this_user)
                     duplicates += 1
                     continue
 
                 gt_user_to_slack_user[search_results["username"]] = profile["email"]
 
-                new_profile = {}
-
                 if profile["email"] != search_results["email"]:
                     update_email += 1
-                    logger.info(CHANGING_EMAIL.format(old=profile["email"], new=search_results["email"]))
-                    new_profile["email"] = search_results["email"]
+                    this_user["Recommended email address"] = search_results["email"]
 
-                if (
-                    args.fix_names
-                    and search_results["name"] != profile["real_name"]
-                    and not name_looks_valid(profile["real_name"])
-                ):
-                    update_name += 1
-                    logger.info(
-                        CHANGING_NAME.format(
-                            email=profile["email"], old=profile["real_name"], new=search_results["name"]
-                        )
-                    )
-                    new_profile["real_name"] = search_results["name"]
+                user_details.append(this_user)
 
-                if args.fix_names and profile["display_name"] != "":
-                    new_profile["display_name"] = ""
+    with open(
+        slack.team_info()["team"]["name"]
+        + " - User Accounts - "
+        + datetime.datetime.now().strftime("%B %d, %Y")
+        + ".csv",
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as csvfile:
+        writer = DictWriter(
+            csvfile,
+            fieldnames=[
+                "Workspace user id",
+                "Workspace full name",
+                "Workspace display name",
+                "Workspace username",
+                "Workspace email address",
+                "Workspace account type",
+                "Workspace account status",
+                "Georgia Tech username",
+                "Georgia Tech full name",
+                "Match reason",
+                "Recommended email address",
+                "Notes",
+                "Action taken",
+            ],
+        )
 
-                if len(new_profile) > 0 and not args.dry_run:
-                    apply_changes(member, new_profile)
-
-            elif args.fuzzy_match and (  # email is non-gatech.edu
-                len(profile["real_name"].split()) == 2 or len(profile["display_name"].split()) == 2
-            ):
-                real_name_parts = profile["real_name"].split()
-                display_name_parts = profile["display_name"].split()
-
-                search_results = None
-
-                if len(real_name_parts) == 2:
-                    search_results = find_user(givenName=real_name_parts[0] + "*", sn=real_name_parts[1])
-                    if search_results is None:
-                        if len(display_name_parts) == 2:
-                            search_results = find_user(givenName=display_name_parts[0] + "*", sn=display_name_parts[1])
-                            if search_results is None:
-                                no_match += 1
-                                logger.warning(NO_MATCH_FOR_NAME.format(**profile))
-                                continue
-                        else:  # display_name field is not two words
-                            no_match += 1
-                            logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
-                            continue
-
-                if len(display_name_parts) == 2:
-                    search_results = find_user(givenName=display_name_parts[0] + "*", sn=display_name_parts[1])
-                    if search_results is None:
-                        no_match += 1
-                        logger.warning(NO_MATCH_FOR_NAME.format(**profile))
-                        continue
-
-                if search_results is None:
-                    raise Exception("Missing a case somewhere! Email: " + profile["email"])
-
-                new_profile = {}
-
-                if profile["email"] != search_results["email"]:
-                    update_email += 1
-                    logger.info(CHANGING_EMAIL.format(old=profile["email"], new=search_results["email"]))
-                    new_profile["email"] = search_results["email"]
-
-                if (
-                    args.fix_names
-                    and search_results["name"] != profile["real_name"]
-                    and not name_looks_valid(profile["real_name"])
-                ):
-                    update_name += 1
-                    logger.info(
-                        CHANGING_NAME.format(
-                            email=profile["email"], old=profile["real_name"], new=search_results["name"]
-                        )
-                    )
-                    new_profile["real_name"] = search_results["name"]
-
-                if args.fix_names and profile["display_name"] != "":
-                    new_profile["display_name"] = ""
-
-                if len(new_profile) > 0 and not args.dry_run:
-                    apply_changes(member, new_profile)
-            else:  # neither name field is two words
-                no_match += 1
-                logger.warning(NOT_ENOUGH_INFO_TO_MATCH.format(**profile))
-                continue
+        writer.writeheader()
+        for user in user_details:
+            writer.writerow(user)
 
     logger.info(f"Total emails updated: {update_email}")
-    if args.fix_names:
-        logger.info(f"Total names updated: {update_name}")
     logger.info(f"Total unmatched accounts: {no_match}")
     logger.info(f"Total duplicate accounts: {duplicates}")
     logger.info(f"Total accounts: {total_accounts}")
