@@ -134,3 +134,6 @@ dmypy.json
 
 # Cached external calls
 _cache/
+
+# Data
+*.csv
